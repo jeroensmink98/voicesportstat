@@ -72,7 +72,7 @@ export class VoiceMediaRecorder {
 
   constructor(config: MediaRecorderConfig = {}, events: MediaRecorderEvents = {}) {
     this.config = {
-      mimeType: config.mimeType || 'audio/webm;codecs=opus',
+      mimeType: config.mimeType || 'audio/wav',
       audioBitsPerSecond: config.audioBitsPerSecond || 128000,
       chunkInterval: config.chunkInterval || 250,
       websocketUrl: config.websocketUrl || ''
@@ -163,9 +163,13 @@ export class VoiceMediaRecorder {
       // Check if the browser supports the desired mime type
       if (!MediaRecorder.isTypeSupported(this.config.mimeType)) {
         // Fallback to a more widely supported format
-        this.config.mimeType = 'audio/webm';
+        this.config.mimeType = 'audio/wav';
         if (!MediaRecorder.isTypeSupported(this.config.mimeType)) {
-          this.config.mimeType = 'audio/mp4';
+          // Try WebM as fallback (though we prefer WAV)
+          this.config.mimeType = 'audio/webm;codecs=opus';
+          if (!MediaRecorder.isTypeSupported(this.config.mimeType)) {
+            this.config.mimeType = 'audio/webm';
+          }
         }
       }
 

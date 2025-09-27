@@ -24,97 +24,53 @@ class TranscriptionService:
         self.TRANSCRIPTIONS_DIR.mkdir(exist_ok=True)
 
     async def transcribe_audio(self, audio_bytes: bytes, session_id: str, chunk_count: int) -> Dict[str, Any]:
-        """Transcribe combined audio using OpenAI Whisper API"""
-        temp_file_path = None
+        """Transcribe WAV bytes using OpenAI Whisper API. Assumes bytes are valid WAV."""
+        temp_wav_path = None
 
         try:
-            # Create temporary file for combined audio
+            # Create temporary WAV file for this batch
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            temp_file_path = self.TRANSCRIPTIONS_DIR / f"temp_audio_{session_id}_{timestamp}.webm"
+            temp_wav_path = self.TRANSCRIPTIONS_DIR / f"temp_audio_{session_id}_{timestamp}.wav"
 
-            # Write audio bytes to temporary file
-            with open(temp_file_path, "wb") as temp_file:
-                temp_file.write(audio_bytes)
+            with open(temp_wav_path, "wb") as wav_file:
+                wav_file.write(audio_bytes)
 
-            # Calculate estimated duration
-            estimated_duration = chunk_count * 1.0  # 1 second per chunk
-
-            print(f"Transcribing {len(audio_bytes)} bytes using Whisper API...")
-
-            # Try 1: Direct WebM transcription
+            # Basic diagnostics: read WAV params to estimate duration
+            estimated_duration = None
             try:
-                with open(temp_file_path, "rb") as audio_file:
-                    print("Trying direct WebM transcription...")
-                    response = client.audio.transcriptions.create(
-                        model="whisper-1",
-                        file=audio_file,
-                        language="en",
-                        response_format="verbose_json"
-                    )
+                import wave, contextlib
+                with contextlib.closing(wave.open(str(temp_wav_path), 'rb')) as wf:
+                    frames = wf.getnframes()
+                    rate = wf.getframerate() or 16000
+                    estimated_duration = frames / float(rate)
+                    print(f"WAV diagnostics: channels={wf.getnchannels()} sampwidth={wf.getsampwidth()} framerate={wf.getframerate()} frames={frames} duration~{estimated_duration:.2f}s")
+            except Exception as diag_err:
+                print(f"WAV diagnostics failed: {diag_err}")
+                estimated_duration = chunk_count * 0.25
 
-                transcription_text = response.text
-                print(f"✓ Direct WebM transcription successful: {len(transcription_text)} characters")
+            print(f"Transcribing {len(audio_bytes)} bytes (estimated {estimated_duration:.2f}s) using Whisper API...")
 
-            except Exception as webm_error:
-                print(f"✗ Direct WebM failed: {webm_error}")
-                print("Trying conversion approach...")
+            # Transcribe
+            with open(temp_wav_path, "rb") as audio_file:
+                response = client.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=audio_file,
+                    language="en",
+                    response_format="verbose_json"
+                )
 
-                # Try 2: Convert to WAV and transcribe
-                try:
-                    # Import conversion service here to avoid circular imports
-                    from .file_conversion_service import FileConversionService
-
-                    conversion_service = FileConversionService()
-                    wav_path = temp_file_path.with_suffix('.wav')
-
-                    if await conversion_service.convert_webm_to_wav(temp_file_path, wav_path):
-                        print(f"✓ Converted to WAV: {wav_path}")
-
-                        with open(wav_path, "rb") as audio_file:
-                            response = client.audio.transcriptions.create(
-                                model="whisper-1",
-                                file=audio_file,
-                                language="en",
-                                response_format="verbose_json"
-                            )
-
-                        transcription_text = response.text
-                        print(f"✓ WAV transcription successful: {len(transcription_text)} characters")
-
-                    else:
-                        # Try 3: Convert to MP3 as last resort
-                        mp3_path = temp_file_path.with_suffix('.mp3')
-
-                        if await conversion_service.convert_webm_to_mp3(temp_file_path, mp3_path):
-                            print(f"✓ Converted to MP3: {mp3_path}")
-
-                            with open(mp3_path, "rb") as audio_file:
-                                response = client.audio.transcriptions.create(
-                                    model="whisper-1",
-                                    file=audio_file,
-                                    language="en",
-                                    response_format="verbose_json"
-                                )
-
-                            transcription_text = response.text
-                            print(f"✓ MP3 transcription successful: {len(transcription_text)} characters")
-
-                        else:
-                            raise Exception("All conversion methods failed")
-
-                except Exception as conversion_error:
-                    print(f"✗ Conversion approach failed: {conversion_error}")
-                    raise webm_error
+            transcription_text = response.text
+            print(f"✓ WAV transcription successful: {len(transcription_text)} characters")
 
             # Create transcription result
             result = {
                 "text": transcription_text,
                 "confidence": 0.95,
-                "duration": round(estimated_duration, 2),
+                "duration": round(float(estimated_duration or (chunk_count * 0.25)), 2),
                 "chunk_count": chunk_count,
                 "audio_size_bytes": len(audio_bytes),
                 "model": "whisper-1",
-                "language": response.language if hasattr(response, 'language') else "en",
+                "language": getattr(response, 'language', 'en') or 'en',
                 "timestamp": datetime.now().isoformat()
             }
 
@@ -138,8 +94,8 @@ class TranscriptionService:
                 "timestamp": datetime.now().isoformat()
             }
         finally:
-            # Clean up temporary files
-            self._cleanup_temp_files(temp_file_path)
+            # Clean up temporary WAV file
+            self._cleanup_temp_files(temp_wav_path)
 
     async def save_transcription_to_json(self, transcription_result: Dict[str, Any], session_id: str, timestamp: str):
         """Save transcription result to JSON file"""
@@ -181,23 +137,14 @@ class TranscriptionService:
         except Exception as e:
             print(f"Error saving transcription to JSON: {e}")
 
-    def _cleanup_temp_files(self, temp_file_path: Path):
-        """Clean up temporary files"""
-        if not temp_file_path:
-            return
-
-        cleanup_files = [temp_file_path]
-        # Also clean up converted files if they were created
-        cleanup_files.append(temp_file_path.with_suffix('.wav'))
-        cleanup_files.append(temp_file_path.with_suffix('.mp3'))
-
-        for file_path in cleanup_files:
-            if file_path and os.path.exists(file_path):
-                try:
-                    os.unlink(file_path)
-                    print(f"Cleaned up temporary file: {file_path}")
-                except Exception as cleanup_error:
-                    print(f"Warning: Could not clean up {file_path}: {cleanup_error}")
+    def _cleanup_temp_files(self, wav_path: Path):
+        """Clean up temporary WAV file"""
+        if wav_path and os.path.exists(wav_path):
+            try:
+                os.unlink(wav_path)
+                print(f"Cleaned up temporary file: {wav_path}")
+            except Exception as cleanup_error:
+                print(f"Warning: Could not clean up {wav_path}: {cleanup_error}")
 
 
 # Global instance

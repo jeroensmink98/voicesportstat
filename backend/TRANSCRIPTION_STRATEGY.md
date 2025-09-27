@@ -44,7 +44,7 @@ MAX_CHUNKS_FOR_BATCH = 40     # Maximum chunks (10 seconds)
 ```python
 async def batch_transcribe_audio(audio_bytes: bytes, session_id: str, chunk_count: int):
     # Save to temporary file
-    with tempfile.NamedTemporaryFile(suffix='.webm', delete=False) as temp_file:
+    with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
         temp_file.write(audio_bytes)
         temp_file_path = temp_file.name
     

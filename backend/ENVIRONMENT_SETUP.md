@@ -31,7 +31,7 @@ uv sync
 
 ### 2. Install FFmpeg (Required for Audio Conversion)
 
-The backend uses FFmpeg to convert WebM audio to WAV format for Whisper API compatibility.
+The backend uses FFmpeg for audio format conversion when needed. The application now primarily processes WAV audio files directly.
 
 #### Windows
 ```bash

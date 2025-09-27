@@ -46,7 +46,7 @@ The `/ws/audio` endpoint handles real-time audio streaming:
   "data": [/* audio bytes array */],
   "timestamp": 1640995200000,
   "sequenceNumber": 1,
-  "mimeType": "audio/webm;codecs=opus"
+  "mimeType": "audio/wav"
 }
 ```
 

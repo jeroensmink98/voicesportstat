@@ -15,13 +15,13 @@ async def test_audio_conversion():
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_path = Path(temp_dir)
         
-        # Create a dummy WebM file (just some bytes)
-        input_file = temp_path / "test_input.webm"
+        # Create a dummy WAV file (just some bytes)
+        input_file = temp_path / "test_input.wav"
         output_file = temp_path / "test_output.wav"
-        
+
         # Write some dummy data
         with open(input_file, "wb") as f:
-            f.write(b"dummy webm data" * 100)  # Some dummy data
+            f.write(b"dummy wav data" * 100)  # Some dummy data
         
         print(f"Created test input file: {input_file}")
         print(f"File size: {input_file.stat().st_size} bytes")

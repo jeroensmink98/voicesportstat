@@ -5,6 +5,9 @@ from typing import Dict, Any, List
 from pathlib import Path
 import wave
 import io
+from typing import Optional
+
+import ffmpeg
 
 from fastapi import WebSocket, WebSocketDisconnect
 
@@ -26,6 +29,67 @@ class AudioProcessingService:
         self.MIN_CHUNKS_FOR_BATCH = 5   # Minimum chunks before processing
         self.MAX_CHUNKS_FOR_BATCH = 20  # Maximum chunks before forcing processing
 
+        # Create transcriptions directory if it doesn't exist
+        self.TRANSCRIPTIONS_DIR = Path("transcriptions")
+        self.TRANSCRIPTIONS_DIR.mkdir(exist_ok=True)
+
+        # Target PCM/WAV parameters
+        self.TARGET_SAMPLE_RATE = 16000
+        self.TARGET_CHANNELS = 1
+        self.TARGET_SAMPLE_WIDTH = 2  # bytes (16-bit)
+
+    def _decode_to_pcm(self, audio_bytes: bytes, mime_type: Optional[str]) -> bytes:
+        """Decode an input chunk (WAV or WebM/Opus) to PCM S16LE 16k mono using ffmpeg."""
+        if not audio_bytes:
+            return b""
+
+        declared_format: Optional[str] = None
+        try:
+            if mime_type:
+                mime_lower = mime_type.lower()
+                if "webm" in mime_lower:
+                    declared_format = "webm"
+                elif "wav" in mime_lower:
+                    declared_format = "wav"
+
+            def run_ffmpeg(input_bytes: bytes, force_format: Optional[str]) -> bytes:
+                input_kwargs = {"f": force_format} if force_format else {}
+                stream = (
+                    ffmpeg
+                    .input("pipe:0", **input_kwargs)
+                    .output(
+                        "pipe:1",
+                        f="s16le",
+                        acodec="pcm_s16le",
+                        ar=self.TARGET_SAMPLE_RATE,
+                        ac=self.TARGET_CHANNELS,
+                    )
+                    .overwrite_output()
+                )
+                out, err = ffmpeg.run(stream, input=input_bytes, capture_stdout=True, capture_stderr=True)
+                return out
+
+            # First attempt: use declared input format if available
+            try:
+                return run_ffmpeg(audio_bytes, declared_format)
+            except ffmpeg.Error:
+                # Fallback: let ffmpeg auto-detect
+                return run_ffmpeg(audio_bytes, None)
+
+        except ffmpeg.Error as e:
+            preview = e.stderr.decode("utf-8", errors="ignore")[:500] if getattr(e, "stderr", None) else str(e)
+            raise RuntimeError(f"ffmpeg decode error ({declared_format or 'auto'}): {preview}")
+
+    def _wav_from_pcm(self, pcm_bytes: bytes) -> bytes:
+        """Wrap raw PCM S16LE 16k mono bytes into a proper WAV container and return bytes."""
+        buffer = io.BytesIO()
+        with wave.open(buffer, "wb") as wav_file:
+            wav_file.setnchannels(self.TARGET_CHANNELS)
+            wav_file.setsampwidth(self.TARGET_SAMPLE_WIDTH)
+            wav_file.setframerate(self.TARGET_SAMPLE_RATE)
+            wav_file.writeframes(pcm_bytes)
+        return buffer.getvalue()
+
     async def handle_websocket_connection(self, websocket: WebSocket):
         """Handle WebSocket connection for audio streaming"""
         await websocket.accept()
@@ -40,7 +104,11 @@ class AudioProcessingService:
                 "start_time": datetime.now(),
                 "last_processed": datetime.now(),
                 "total_chunks": 0,
-                "websocket": websocket
+                "websocket": websocket,
+                # PCM aggregation state
+                "pcm_buffer": bytearray(),
+                "last_batch_offset": 0,
+                "source_mime_type": None,
             }
 
             # Send welcome message
@@ -104,7 +172,7 @@ class AudioProcessingService:
             audio_data = message.get("data", [])
             timestamp = message.get("timestamp")
             sequence_number = message.get("sequenceNumber")
-            mime_type = message.get("mimeType", "audio/webm")
+            mime_type = message.get("mimeType", "audio/wav")
 
             # Convert bytes array back to bytes
             audio_bytes = bytes(audio_data)
@@ -114,11 +182,31 @@ class AudioProcessingService:
             # Add chunk to session
             if session_id in self.audio_sessions:
                 session = self.audio_sessions[session_id]
+
+                # Persist the source mime type for diagnostics
+                if not session.get("source_mime_type"):
+                    session["source_mime_type"] = mime_type
+
+                # Decode to target PCM and append to the running buffer
+                try:
+                    pcm_bytes = self._decode_to_pcm(audio_bytes, mime_type)
+                except Exception as decode_error:
+                    print(f"PCM decode failed for chunk {sequence_number}: {decode_error}")
+                    await websocket.send_text(json.dumps({
+                        "type": "error",
+                        "message": f"PCM decode failed for chunk {sequence_number}: {decode_error}",
+                        "timestamp": datetime.now().isoformat()
+                    }))
+                    return
+
+                session["pcm_buffer"].extend(pcm_bytes)
+
+                # Store only metadata for acknowledgments and counting
                 session["chunks"].append({
-                    "data": audio_bytes,
                     "timestamp": timestamp,
                     "sequence_number": sequence_number,
-                    "mime_type": mime_type
+                    "mime_type": mime_type,
+                    "decoded_pcm_bytes": len(pcm_bytes),
                 })
                 session["total_chunks"] += 1
 
@@ -164,24 +252,22 @@ class AudioProcessingService:
         try:
             print(f"Processing batch for session {session_id}: {len(chunks)} chunks")
 
-            # Combine all audio chunks into a single buffer
-            combined_audio_chunks = []
-            total_size = 0
+            # Build WAV from the newly added PCM slice
+            pcm_buffer: bytearray = session["pcm_buffer"]
+            start_offset: int = session.get("last_batch_offset", 0)
+            end_offset: int = len(pcm_buffer)
 
-            for chunk in chunks:
-                combined_audio_chunks.append(chunk["data"])
-                total_size += len(chunk["data"])
+            if end_offset <= start_offset:
+                print("No new PCM to process for this batch")
+                return
 
-            # Concatenate all chunks
-            combined_audio = b''.join(combined_audio_chunks)
+            pcm_slice = bytes(pcm_buffer[start_offset:end_offset])
+            wav_bytes = self._wav_from_pcm(pcm_slice)
 
-            print(f"Combined audio size: {len(combined_audio)} bytes from {len(chunks)} chunks")
-            print(f"Total audio duration estimate: {len(chunks) * 0.25} seconds")
+            total_size = len(wav_bytes)
 
-            # Debug: Check if we have valid WebM data
-            print(f"First 20 bytes: {combined_audio[:20].hex()}")
-            if len(combined_audio) > 20:
-                print(f"Last 20 bytes: {combined_audio[-20:].hex()}")
+            print(f"Built WAV from PCM slice: {total_size} bytes (pcm {len(pcm_slice)}), source={session.get('source_mime_type')}")
+            print(f"WAV header preview: {wav_bytes[:20].hex()}")
 
             # Send batch processing status
             await session["websocket"].send_text(json.dumps({
@@ -190,8 +276,8 @@ class AudioProcessingService:
                 "timestamp": datetime.now().isoformat()
             }))
 
-            # Process the combined audio
-            transcription_result = await self.batch_transcribe_audio(combined_audio, session_id, len(chunks))
+            # Process the WAV bytes for this batch
+            transcription_result = await self.batch_transcribe_audio(wav_bytes, session_id, len(chunks))
 
             # Send transcription result
             await session["websocket"].send_text(json.dumps({
@@ -204,7 +290,14 @@ class AudioProcessingService:
                 "ready_for_llm": True  # Flag indicating this is ready for LLM processing
             }))
 
-            # Clear processed chunks
+            # Advance the batch offset and optionally compact the PCM buffer to avoid unbounded growth
+            session["last_batch_offset"] = end_offset
+
+            # Compact buffer: drop processed PCM and reset offset
+            del pcm_buffer[:end_offset]
+            session["last_batch_offset"] = 0
+
+            # Clear processed chunk metadata
             session["chunks"] = []
             session["last_processed"] = datetime.now()
 

@@ -2,7 +2,7 @@
 
 ## 📋 Overview
 
-VoiceSportStat is a FastAPI-based backend application that provides real-time audio transcription services using OpenAI's Whisper API. The application receives audio chunks via WebSocket connections, processes them in batches, and transcribes them to text.
+VoiceSportStat is a FastAPI-based backend application that provides real-time audio transcription services using OpenAI's Whisper API. The application receives WAV audio chunks via WebSocket connections, processes them in batches, and transcribes them to text.
 
 ## 🏗️ Architecture & Structure
 
@@ -103,7 +103,7 @@ uv run uvicorn main:app --host 0.0.0.0 --port 8000
   "data": [/* base64 audio bytes */],
   "timestamp": "2024-01-01T00:00:00Z",
   "sequenceNumber": 1,
-  "mimeType": "audio/webm"
+  "mimeType": "audio/wav"
 }
 ```
 
@@ -181,10 +181,10 @@ Consider adding:
 
 ## 🔄 Data Flow
 
-1. **Audio Reception**: Frontend sends WebM audio chunks via WebSocket
+1. **Audio Reception**: Frontend sends WAV audio chunks via WebSocket
 2. **Batch Processing**: Chunks are collected and processed in batches
-3. **Format Conversion**: WebM converted to WAV if needed for Whisper
-4. **Transcription**: OpenAI Whisper API processes audio to text
+3. **Audio Combining**: WAV chunks are combined into a single audio stream
+4. **Transcription**: OpenAI Whisper API processes the combined WAV audio to text
 5. **Storage**: Results saved as JSON files in `transcriptions/` directory
 6. **Response**: Transcription results sent back to frontend
 
@@ -209,6 +209,7 @@ Consider adding:
 - Batch processing reduces API calls
 - Temporary file cleanup prevents disk space issues
 - WebSocket connection management
+- **Updated**: Now processes WAV audio chunks directly (no conversion needed)
 
 ### Potential Improvements
 - Audio compression before processing

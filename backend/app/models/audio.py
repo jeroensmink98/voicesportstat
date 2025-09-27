@@ -8,7 +8,7 @@ class AudioChunk(BaseModel):
     data: List[int]  # Base64 encoded audio data as array of integers
     timestamp: Optional[str] = None
     sequenceNumber: int
-    mimeType: str = "audio/webm"
+    mimeType: str = "audio/wav"
 
 
 class WebSocketMessage(BaseModel):
