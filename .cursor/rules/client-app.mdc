@@ -1,0 +1,11 @@
+---
+description: Sveltekit
+globs: *.ts, *.svelte
+alwaysApply: false
+---
+
+- use svelte 5 
+- use pnpm instead of npm
+- run pnpm lint to lint the code
+- the client app uses tailwind css
+- use svelte 5 runes https://svelte.dev/blog/runes
