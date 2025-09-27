@@ -3,7 +3,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any
 
-from ..models.responses import TranscriptionFileInfo, TranscriptionListResponse, TranscriptionData
+from ..models.responses import TranscriptionFileInfo, TranscriptionListResponse
 
 
 class FileManagementService:
@@ -18,7 +18,7 @@ class FileManagementService:
         """List all transcription files"""
         try:
             transcription_files = []
-            for file_path in self.TRANSCRIPTIONS_DIR.glob("transcription_*.json"):
+            for file_path in self.TRANSCRIPTIONS_DIR.glob("transcription_session_*.json"):
                 file_stat = file_path.stat()
                 transcription_files.append(TranscriptionFileInfo(
                     filename=file_path.name,

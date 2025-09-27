@@ -9,6 +9,7 @@ export interface MediaRecorderConfig {
   audioBitsPerSecond?: number;
   chunkInterval?: number; // milliseconds between chunks
   websocketUrl?: string;
+  language?: string; // language code for transcription (e.g., 'en', 'nl', 'de')
 }
 
 export interface MediaRecorderEvents {
@@ -75,7 +76,8 @@ export class VoiceMediaRecorder {
       mimeType: config.mimeType || 'audio/wav',
       audioBitsPerSecond: config.audioBitsPerSecond || 128000,
       chunkInterval: config.chunkInterval || 250,
-      websocketUrl: config.websocketUrl || ''
+      websocketUrl: config.websocketUrl || '',
+      language: config.language || 'en' // default to English
     };
     this.events = events;
   }
@@ -145,11 +147,15 @@ export class VoiceMediaRecorder {
   /**
    * Start recording audio
    */
-  async startRecording(): Promise<boolean> {
+  async startRecording(currentLanguage?: string): Promise<boolean> {
     if (this.isRecording) {
       console.warn('Recording is already in progress');
       return true;
     }
+
+    // Use the provided language or fall back to config
+    const languageToUse = currentLanguage || this.config.language;
+    console.log(`Starting recording with language: ${languageToUse}`);
 
     // Ensure we have permission and media stream
     if (!this.mediaStream) {
@@ -160,6 +166,14 @@ export class VoiceMediaRecorder {
     }
 
     try {
+      // Ensure a fresh WebSocket connection per recording session
+      if (!this.websocket || this.websocket.readyState !== WebSocket.OPEN) {
+        const connected = await this.connectWebSocket();
+        if (!connected) {
+          throw new Error('Failed to connect WebSocket');
+        }
+      }
+
       // Check if the browser supports the desired mime type
       if (!MediaRecorder.isTypeSupported(this.config.mimeType)) {
         // Fallback to a more widely supported format
@@ -210,6 +224,10 @@ export class VoiceMediaRecorder {
 
       this.mediaRecorder.start(this.config.chunkInterval);
       this.isRecording = true;
+
+      // Send start recording message with language information
+      this.sendStartRecordingMessage(languageToUse);
+
       this.events.onStart?.();
 
       return true;
@@ -233,6 +251,35 @@ export class VoiceMediaRecorder {
     
     // Send end recording message to server
     this.sendEndRecordingMessage();
+
+    // Disconnect the WebSocket so the next start creates a new server session
+    this.disconnectWebSocket();
+  }
+
+  /**
+   * Send start recording message to WebSocket server with language information
+   */
+  private sendStartRecordingMessage(languageToUse?: string): void {
+    if (!this.websocket || this.websocket.readyState !== WebSocket.OPEN) {
+      console.warn('WebSocket not connected, cannot send start recording message');
+      return;
+    }
+
+    try {
+      const language = languageToUse || this.config.language;
+      const message = {
+        type: 'start_recording',
+        language: language,
+        timestamp: Date.now()
+      };
+
+      this.websocket.send(JSON.stringify(message));
+      console.log(`Sent start recording message with language: ${language}`);
+      console.log('Full message:', message);
+    } catch (error) {
+      console.error('Failed to send start recording message:', error);
+      this.events.onWebSocketError?.(new Error('Failed to send start recording message'));
+    }
   }
 
   /**

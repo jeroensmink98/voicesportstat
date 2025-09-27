@@ -7,12 +7,14 @@
     websocketUrl?: string;
     chunkInterval?: number;
     autoStart?: boolean;
+    language?: string;
   }
 
-  let { 
+  let {
     websocketUrl = $bindable('ws://localhost:8000/ws/audio'),
     chunkInterval = $bindable(250),
-    autoStart = false 
+    autoStart = false,
+    language = $bindable('en')
   }: Props = $props();
 
   // State using $state rune
@@ -27,13 +29,19 @@
   let chunksReceived = $state(0);
   let isProcessingBatch = $state(false);
 
+  // Watch for language changes and log them
+  $effect(() => {
+    console.log(`AudioRecorder language prop changed to: ${language}`);
+  });
+
   // Initialize recorder
   onMount(() => {
     recorder = new VoiceMediaRecorder(
       {
         websocketUrl,
         chunkInterval,
-        mimeType: 'audio/webm;codecs=opus'
+        mimeType: 'audio/webm;codecs=opus',
+        language
       },
       {
         onDataAvailable: (chunk) => {
@@ -144,7 +152,8 @@
       if (!connected) return;
     }
 
-    await recorder.startRecording();
+    console.log(`Starting recording with current language: ${language}`);
+    await recorder.startRecording(language);
   }
 
   function stopRecording() {
@@ -167,7 +176,7 @@
   }
 </script>
 
-<div class="max-w-md mx-auto p-5 border border-gray-300 rounded-lg font-sans">
+<div class="w-full max-w-4xl mx-auto p-5 border border-gray-300 rounded-lg font-sans">
   <div class="flex justify-between items-center mb-5">
     <h3 class="text-lg font-semibold text-gray-800 m-0">Audio Recorder</h3>
     <div class="flex gap-2">
@@ -233,15 +242,28 @@
     
     <label class="flex flex-col gap-1 text-sm text-gray-600">
       Chunk Interval (ms):
-      <input 
-        type="number" 
-        bind:value={chunkInterval} 
-        min="100" 
-        max="1000" 
+      <input
+        type="number"
+        bind:value={chunkInterval}
+        min="100"
+        max="1000"
         step="50"
         disabled={isRecording}
         class="p-2 border border-gray-300 rounded disabled:bg-gray-100 disabled:text-gray-500"
       />
+    </label>
+
+    <label class="flex flex-col gap-1 text-sm text-gray-600">
+      Language:
+      <select
+        bind:value={language}
+        disabled={isRecording}
+        class="p-2 border border-gray-300 rounded disabled:bg-gray-100 disabled:text-gray-500"
+      >
+        <option value="en">English</option>
+        <option value="nl">Dutch</option>
+        <option value="de">German</option>
+      </select>
     </label>
   </div>
 
@@ -263,7 +285,7 @@
   {#if batchTranscriptions.length > 0}
     <div class="mt-5">
       <h4 class="text-md font-semibold text-gray-800 mb-3">Batch Transcriptions (Ready for LLM)</h4>
-      <div class="max-h-64 overflow-y-auto space-y-3">
+      <div class="max-h-96 overflow-y-auto grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
         {#each batchTranscriptions as transcription, index}
           <div class="bg-blue-50 border border-blue-200 rounded p-4">
             <div class="flex justify-between items-start mb-2">

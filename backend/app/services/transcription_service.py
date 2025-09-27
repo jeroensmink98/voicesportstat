@@ -1,5 +1,4 @@
 import os
-import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any
@@ -23,8 +22,9 @@ class TranscriptionService:
         self.TRANSCRIPTIONS_DIR = Path("transcriptions")
         self.TRANSCRIPTIONS_DIR.mkdir(exist_ok=True)
 
-    async def transcribe_audio(self, audio_bytes: bytes, session_id: str, chunk_count: int) -> Dict[str, Any]:
+    async def transcribe_audio(self, audio_bytes: bytes, session_id: str, chunk_count: int, language: str = "en") -> Dict[str, Any]:
         """Transcribe WAV bytes using OpenAI Whisper API. Assumes bytes are valid WAV."""
+        print(f"DEBUG: transcribe_audio called with language: {language} for session: {session_id}")
         temp_wav_path = None
 
         try:
@@ -55,7 +55,7 @@ class TranscriptionService:
                 response = client.audio.transcriptions.create(
                     model="whisper-1",
                     file=audio_file,
-                    language="en",
+                    language=language,
                     response_format="verbose_json"
                 )
 
@@ -63,6 +63,8 @@ class TranscriptionService:
             print(f"✓ WAV transcription successful: {len(transcription_text)} characters")
 
             # Create transcription result
+            detected_language = getattr(response, 'language', None)
+            print(f"DEBUG: Using language '{language}' for result (detected: {detected_language})")
             result = {
                 "text": transcription_text,
                 "confidence": 0.95,
@@ -70,12 +72,13 @@ class TranscriptionService:
                 "chunk_count": chunk_count,
                 "audio_size_bytes": len(audio_bytes),
                 "model": "whisper-1",
-                "language": getattr(response, 'language', 'en') or 'en',
+                "language": language,  # Use the language parameter passed from the session
+                "detected_language": detected_language,  # Store detected language separately if needed
                 "timestamp": datetime.now().isoformat()
             }
 
             # Save transcription to JSON file
-            await self.save_transcription_to_json(result, session_id, timestamp)
+            await self.save_transcription_to_json(result, session_id, timestamp, language)
 
             print(f"Transcription complete: {len(transcription_text)} characters")
             return result
@@ -97,42 +100,73 @@ class TranscriptionService:
             # Clean up temporary WAV file
             self._cleanup_temp_files(temp_wav_path)
 
-    async def save_transcription_to_json(self, transcription_result: Dict[str, Any], session_id: str, timestamp: str):
-        """Save transcription result to JSON file"""
+    async def save_transcription_to_json(self, transcription_result: Dict[str, Any], session_id: str, timestamp: str, language: str = "en"):
+        """Save transcription result to session JSON file (accumulate all transcriptions for the session)"""
         try:
-            # Create filename with session and timestamp
-            filename = f"transcription_{session_id}_{timestamp}.json"
+            # Create filename with only session_id (one file per session)
+            filename = f"transcription_session_{session_id}.json"
             filepath = self.TRANSCRIPTIONS_DIR / filename
 
-            # Prepare data for JSON file
-            json_data = {
-                "session_id": session_id,
+            # Prepare transcription data for this batch
+            transcription_data = {
                 "timestamp": transcription_result["timestamp"],
-                "transcription": {
-                    "text": transcription_result["text"],
-                    "confidence": transcription_result["confidence"],
-                    "duration_seconds": transcription_result["duration"],
-                    "chunk_count": transcription_result["chunk_count"],
-                    "audio_size_bytes": transcription_result["audio_size_bytes"]
-                },
-                "metadata": {
-                    "model": transcription_result.get("model", "whisper-1"),
-                    "language": transcription_result.get("language", "en"),
-                    "processing_timestamp": datetime.now().isoformat(),
-                    "ready_for_llm": True
-                }
+                "text": transcription_result["text"],
+                "confidence": transcription_result["confidence"],
+                "duration_seconds": transcription_result["duration"],
+                "chunk_count": transcription_result["chunk_count"],
+                "audio_size_bytes": transcription_result["audio_size_bytes"],
+                "model": transcription_result.get("model", "whisper-1"),
+                "language": language,  # Use the language passed from the session
+                "processing_timestamp": datetime.now().isoformat(),
+                "ready_for_llm": True
             }
 
             # Add error info if present
             if "error" in transcription_result:
-                json_data["error"] = transcription_result["error"]
+                transcription_data["error"] = transcription_result["error"]
 
-            # Write to JSON file
             import json
-            with open(filepath, "w", encoding="utf-8") as json_file:
-                json.dump(json_data, json_file, indent=2, ensure_ascii=False)
 
-            print(f"Transcription saved to: {filepath}")
+            # Check if session file already exists
+            if filepath.exists():
+                # Read existing session data
+                try:
+                    with open(filepath, "r", encoding="utf-8") as json_file:
+                        session_data = json.load(json_file)
+                except json.JSONDecodeError:
+                    print(f"Warning: Existing session file {filepath} is corrupted, creating new one")
+                    session_data = None
+            else:
+                session_data = None
+
+            if session_data:
+                # Append to existing session
+                if "transcriptions" not in session_data:
+                    # Convert old format to new format
+                    session_data["transcriptions"] = [session_data.pop("transcription", {})]
+                    session_data["transcriptions"][0]["timestamp"] = session_data.get("timestamp", transcription_result["timestamp"])
+                    session_data["transcriptions"][0]["processing_timestamp"] = session_data.get("processing_timestamp", datetime.now().isoformat())
+                    session_data["transcriptions"][0]["language"] = session_data["transcriptions"][0].get("language", language)
+
+                # Add new transcription
+                session_data["transcriptions"].append(transcription_data)
+                session_data["last_updated"] = datetime.now().isoformat()
+                session_data["language"] = language  # Update session language if it changed
+            else:
+                # Create new session file
+                session_data = {
+                    "session_id": session_id,
+                    "created_at": datetime.now().isoformat(),
+                    "last_updated": datetime.now().isoformat(),
+                    "language": language,
+                    "transcriptions": [transcription_data]
+                }
+
+            # Write updated session data back to file
+            with open(filepath, "w", encoding="utf-8") as json_file:
+                json.dump(session_data, json_file, indent=2, ensure_ascii=False)
+
+            print(f"Transcription saved to session file: {filepath} (total transcriptions: {len(session_data['transcriptions'])})")
 
         except Exception as e:
             print(f"Error saving transcription to JSON: {e}")

@@ -18,6 +18,7 @@ class WebSocketMessage(BaseModel):
     timestamp: Optional[str] = None
     sequenceNumber: Optional[int] = None
     mimeType: Optional[str] = None
+    language: Optional[str] = None
 
 
 class AudioSession(BaseModel):
@@ -28,6 +29,7 @@ class AudioSession(BaseModel):
     last_processed: datetime
     total_chunks: int
     websocket: Any  # WebSocket connection object
+    language: str = "en"  # Language code for transcription
 
 
 class TranscriptionResult(BaseModel):
@@ -41,12 +43,6 @@ class TranscriptionResult(BaseModel):
     language: str = "en"
     timestamp: str
     error: Optional[str] = None
-
-
-class BatchProcessingInfo(BaseModel):
-    """Information about batch processing"""
-    message: str
-    timestamp: str
 
 
 class TranscriptionResponse(BaseModel):

@@ -105,6 +105,7 @@ class AudioProcessingService:
                 "last_processed": datetime.now(),
                 "total_chunks": 0,
                 "websocket": websocket,
+                "language": "en",  # Default language
                 # PCM aggregation state
                 "pcm_buffer": bytearray(),
                 "last_batch_offset": 0,
@@ -133,6 +134,26 @@ class AudioProcessingService:
                     if message.get("type") == "audio_chunk":
                         # Process audio chunk with batch logic
                         await self.process_audio_chunk_batch(websocket, session_id, message)
+                    elif message.get("type") == "start_recording":
+                        # Store language information for the session
+                        session_language = message.get("language", "en")
+                        print(f"DEBUG: Received start_recording with language: {session_language}")
+                        print(f"DEBUG: Session ID: {session_id}")
+                        print(f"DEBUG: Sessions available: {list(self.audio_sessions.keys())}")
+
+                        if session_id in self.audio_sessions:
+                            old_language = self.audio_sessions[session_id].get("language", "en")
+                            self.audio_sessions[session_id]["language"] = session_language
+                            new_language = self.audio_sessions[session_id].get("language", "en")
+                            print(f"DEBUG: Updated session language from {old_language} to {new_language}")
+                            await websocket.send_text(json.dumps({
+                                "type": "recording_started",
+                                "message": f"Recording session started with language: {session_language}",
+                                "language": session_language,
+                                "timestamp": datetime.now().isoformat()
+                            }))
+                        else:
+                            print(f"DEBUG: Session {session_id} not found in audio_sessions")
                     elif message.get("type") == "end_recording":
                         # Process final batch
                         await self.process_final_batch(session_id)
@@ -314,7 +335,9 @@ class AudioProcessingService:
             }))
 
             # Process the WAV bytes for this batch
-            transcription_result = await self.batch_transcribe_audio(wav_bytes, session_id, len(chunks))
+            session_language = session.get("language", "en")
+            print(f"DEBUG: Processing batch for session {session_id} with language: {session_language}")
+            transcription_result = await self.batch_transcribe_audio(wav_bytes, session_id, len(chunks), session_language)
 
             # Send transcription result
             await session["websocket"].send_text(json.dumps({
@@ -365,6 +388,12 @@ class AudioProcessingService:
                 "timestamp": datetime.now().isoformat()
             }))
 
+            # Close the websocket to force a fresh session on next recording
+            try:
+                await session["websocket"].close()
+            except Exception as _:
+                pass
+
     async def handle_other_messages(self, websocket: WebSocket, message: Dict[str, Any]):
         """Handle other types of WebSocket messages"""
         message_type = message.get("type")
@@ -393,13 +422,13 @@ class AudioProcessingService:
                 "timestamp": datetime.now().isoformat()
             }))
 
-    async def batch_transcribe_audio(self, audio_bytes: bytes, session_id: str, chunk_count: int) -> Dict[str, Any]:
+    async def batch_transcribe_audio(self, audio_bytes: bytes, session_id: str, chunk_count: int, language: str = "en") -> Dict[str, Any]:
         """Transcribe combined audio using OpenAI Whisper API"""
         # Import here to avoid circular imports
         from .transcription_service import TranscriptionService
 
         transcription_service = TranscriptionService()
-        return await transcription_service.transcribe_audio(audio_bytes, session_id, chunk_count)
+        return await transcription_service.transcribe_audio(audio_bytes, session_id, chunk_count, language)
 
 
 # Global instance

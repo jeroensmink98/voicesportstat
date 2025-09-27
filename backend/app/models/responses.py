@@ -24,15 +24,6 @@ class TranscriptionListResponse(BaseModel):
     directory: str
 
 
-class TranscriptionData(BaseModel):
-    """Transcription data structure"""
-    session_id: str
-    timestamp: str
-    transcription: dict
-    metadata: dict
-    error: Optional[str] = None
-
-
 class ErrorResponse(BaseModel):
     """Error response"""
     error: str
