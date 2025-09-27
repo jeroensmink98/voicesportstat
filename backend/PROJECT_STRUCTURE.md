@@ -2,7 +2,7 @@
 
 ## 📋 Overview
 
-VoiceSportStat is a FastAPI-based backend application that provides real-time audio transcription services using OpenAI's Whisper API. The application receives WAV audio chunks via WebSocket connections, processes them in batches, and transcribes them to text.
+VoiceSportStat is a FastAPI-based backend application that provides real-time audio transcription services using OpenAI's Whisper API. The application receives audio chunks via WebSocket (usually WebM/Opus or WAV depending on browser support), decodes them to PCM, aggregates PCM per session, and transcribes batch slices as valid WAV.
 
 ## 🏗️ Architecture & Structure
 
@@ -92,7 +92,7 @@ uv run uvicorn main:app --host 0.0.0.0 --port 8000
 - `GET /transcriptions/{filename}` - Get specific transcription file
 
 ### WebSocket Audio Streaming
-- `WebSocket /ws/audio` - Real-time audio chunk processing
+- `WebSocket /ws/audio` - Real-time audio chunk processing (PCM aggregation, WAV-per-batch to Whisper)
 
 ## 🔄 WebSocket Message Flow
 
@@ -181,10 +181,10 @@ Consider adding:
 
 ## 🔄 Data Flow
 
-1. **Audio Reception**: Frontend sends WAV audio chunks via WebSocket
-2. **Batch Processing**: Chunks are collected and processed in batches
-3. **Audio Combining**: WAV chunks are combined into a single audio stream
-4. **Transcription**: OpenAI Whisper API processes the combined WAV audio to text
+1. **Audio Reception**: Frontend sends audio chunks via WebSocket (WebM/Opus or WAV)
+2. **PCM Aggregation**: Server decodes to PCM S16LE 16k mono and aggregates
+3. **Batch WAV Build**: For each batch, a fresh WAV is built from new PCM slice
+4. **Transcription**: OpenAI Whisper API processes each batch WAV to text
 5. **Storage**: Results saved as JSON files in `transcriptions/` directory
 6. **Response**: Transcription results sent back to frontend
 

@@ -1,6 +1,6 @@
 # Audio Transcription Strategy for VoiceSportStat
 
-## 🎯 **Batch Processing Approach**
+## 🎯 **Batch Processing Approach (PCM Aggregation)**
 
 We've implemented a **batch processing strategy** that's optimized for your goal of creating structured data from transcriptions using an LLM.
 
@@ -14,8 +14,9 @@ We've implemented a **batch processing strategy** that's optimized for your goal
 ## 🔧 **How It Works**
 
 ### **1. Audio Collection Phase**
-- Audio chunks (250ms each) are collected in real-time
-- Chunks are buffered in session storage
+- Audio chunks (~250ms each) are collected in real-time from the browser `MediaRecorder`
+- Chunks may be `audio/webm;codecs=opus` or `audio/wav`, depending on browser support
+- The backend decodes each session’s audio to PCM S16LE 16k mono and aggregates it
 - User sees real-time feedback and chunk acknowledgments
 
 ### **2. Batch Processing Triggers**
@@ -27,112 +28,20 @@ The system processes batches when **any** of these conditions are met:
 
 ### **3. Transcription Pipeline**
 ```
-Audio Chunks → Combine → Transcribe → Send to Frontend → Ready for LLM
+Audio Chunks → Decode to PCM → Aggregate PCM → Build WAV (per batch) → Transcribe (Whisper) → Send to Frontend → Ready for LLM
 ```
 
 ## 📊 **Batch Configuration**
 
 ```python
 BATCH_SIZE_SECONDS = 5        # Process every 5 seconds
-MIN_CHUNKS_FOR_BATCH = 20     # Minimum chunks (5 seconds)
-MAX_CHUNKS_FOR_BATCH = 40     # Maximum chunks (10 seconds)
+MIN_CHUNKS_FOR_BATCH = 5      # Minimum chunks (≈1.25s at 250ms)
+MAX_CHUNKS_FOR_BATCH = 20     # Maximum chunks (≈5s)
 ```
 
-## 🚀 **Integration with Real Transcription Services**
+## 🚀 **Transcription Service (Whisper-Only)**
 
-### **Option 1: OpenAI Whisper API**
-```python
-async def batch_transcribe_audio(audio_bytes: bytes, session_id: str, chunk_count: int):
-    # Save to temporary file
-    with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
-        temp_file.write(audio_bytes)
-        temp_file_path = temp_file.name
-    
-    try:
-        # Call OpenAI Whisper API
-        with open(temp_file_path, 'rb') as audio_file:
-            response = await openai.Audio.transcribe(
-                model="whisper-1",
-                file=audio_file,
-                language="en"  # Optional: specify language
-            )
-        
-        return {
-            "text": response.text,
-            "confidence": 0.95,  # Whisper doesn't provide confidence scores
-            "duration": chunk_count * 0.25,
-            "chunk_count": chunk_count,
-            "audio_size_bytes": len(audio_bytes)
-        }
-    finally:
-        # Clean up temp file
-        os.unlink(temp_file_path)
-```
-
-### **Option 2: Google Speech-to-Text**
-```python
-async def batch_transcribe_audio(audio_bytes: bytes, session_id: str, chunk_count: int):
-    from google.cloud import speech
-    
-    client = speech.SpeechClient()
-    
-    # Configure recognition
-    config = speech.RecognitionConfig(
-        encoding=speech.RecognitionConfig.AudioEncoding.WEBM_OPUS,
-        sample_rate_hertz=44100,
-        language_code="en-US",
-        enable_automatic_punctuation=True,
-        enable_word_time_offsets=True,
-    )
-    
-    audio = speech.RecognitionAudio(content=audio_bytes)
-    
-    response = client.recognize(config=config, audio=audio)
-    
-    if response.results:
-        result = response.results[0]
-        return {
-            "text": result.alternatives[0].transcript,
-            "confidence": result.alternatives[0].confidence,
-            "duration": chunk_count * 0.25,
-            "chunk_count": chunk_count,
-            "audio_size_bytes": len(audio_bytes)
-        }
-```
-
-### **Option 3: Azure Cognitive Services**
-```python
-async def batch_transcribe_audio(audio_bytes: bytes, session_id: str, chunk_count: int):
-    import azure.cognitiveservices.speech as speechsdk
-    
-    # Configure speech config
-    speech_config = speechsdk.SpeechConfig(
-        subscription="your-subscription-key", 
-        region="your-region"
-    )
-    
-    # Create audio config from bytes
-    audio_config = speechsdk.audio.AudioConfig(use_default_microphone=False)
-    audio_stream = speechsdk.audio.PushAudioInputStream()
-    audio_stream.write(audio_bytes)
-    audio_config = speechsdk.audio.AudioConfig(stream=audio_stream)
-    
-    # Perform recognition
-    speech_recognizer = speechsdk.SpeechRecognizer(
-        speech_config=speech_config, 
-        audio_config=audio_config
-    )
-    
-    result = speech_recognizer.recognize_once()
-    
-    return {
-        "text": result.text,
-        "confidence": result.properties.get(speechsdk.PropertyId.SpeechServiceResponse_JsonResult),
-        "duration": chunk_count * 0.25,
-        "chunk_count": chunk_count,
-        "audio_size_bytes": len(audio_bytes)
-    }
-```
+The system standardizes all audio to PCM S16LE 16k mono and builds a valid WAV per batch, which is sent to OpenAI Whisper (`whisper-1`). Other cloud STT providers have been removed from scope for simplicity and consistency.
 
 ## 🧠 **LLM Integration for Structured Data**
 
@@ -188,18 +97,10 @@ async def process_transcription_for_structured_data(transcription_data: dict):
 
 ## 🔄 **Next Steps for Implementation**
 
-1. **Choose Transcription Service**: 
-   - OpenAI Whisper (easiest, good accuracy)
-   - Google Speech-to-Text (best accuracy, more complex)
-   - Azure Speech (good balance, enterprise features)
-
-2. **Replace Mock Function**: Update `batch_transcribe_audio()` with real API calls
-
-3. **Add LLM Integration**: Create endpoints for structured data extraction
-
-4. **Error Handling**: Add retry logic and fallback mechanisms
-
-5. **Audio Format Optimization**: Ensure optimal format for chosen transcription service
+1. **Streaming Granularity**: Optionally emit smaller batches (e.g., 1s) for more “live” feedback.
+2. **LLM Integration**: Create endpoints for structured data extraction from batch text.
+3. **Error Handling**: Add retry/backoff, and circuit breakers for Whisper API errors.
+4. **Monitoring**: Add structured logging and metrics around batch sizes and decode/transcribe latency.
 
 ## 🎯 **Perfect for Your Use Case**
 
