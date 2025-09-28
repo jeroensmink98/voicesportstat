@@ -1,5 +1,6 @@
 import json
 import asyncio
+import logging
 from datetime import datetime
 from typing import Dict, Any, List
 from pathlib import Path
@@ -23,6 +24,8 @@ class AudioProcessingService:
     """Service for handling audio processing, WebSocket connections, and batch processing"""
 
     def __init__(self):
+        # Set up logger
+        self.logger = logging.getLogger(__name__)
         # Global storage for audio sessions
         self.audio_sessions: Dict[str, Dict[str, Any]] = {}
 
@@ -127,7 +130,7 @@ class AudioProcessingService:
                 "timestamp": datetime.now().isoformat()
             }))
 
-            print(f"WebSocket connection established for session {session_id} at {datetime.now()}")
+            self.logger.info(f"WebSocket connection established for session {session_id} at {datetime.now()}")
 
             while True:
                 try:
@@ -141,15 +144,15 @@ class AudioProcessingService:
                     elif message.get("type") == "start_recording":
                         # Store language information for the session
                         session_language = message.get("language", "en")
-                        print(f"DEBUG: Received start_recording with language: {session_language}")
-                        print(f"DEBUG: Session ID: {session_id}")
-                        print(f"DEBUG: Sessions available: {list(self.audio_sessions.keys())}")
+                        self.logger.debug(f"Received start_recording with language: {session_language}")
+                        self.logger.debug(f"Session ID: {session_id}")
+                        self.logger.debug(f"Sessions available: {list(self.audio_sessions.keys())}")
 
                         if session_id in self.audio_sessions:
                             old_language = self.audio_sessions[session_id].get("language", "en")
                             self.audio_sessions[session_id]["language"] = session_language
                             new_language = self.audio_sessions[session_id].get("language", "en")
-                            print(f"DEBUG: Updated session language from {old_language} to {new_language}")
+                            self.logger.debug(f"Updated session language from {old_language} to {new_language}")
                             await websocket.send_text(json.dumps({
                                 "type": "recording_started",
                                 "message": f"Recording session started with language: {session_language}",
@@ -157,7 +160,7 @@ class AudioProcessingService:
                                 "timestamp": datetime.now().isoformat()
                             }))
                         else:
-                            print(f"DEBUG: Session {session_id} not found in audio_sessions")
+                            self.logger.debug(f"Session {session_id} not found in audio_sessions")
                     elif message.get("type") == "end_recording":
                         # Process final batch
                         await self.process_final_batch(session_id)
@@ -167,17 +170,17 @@ class AudioProcessingService:
                         await self.handle_other_messages(websocket, message)
 
                 except WebSocketDisconnect:
-                    print(f"WebSocket disconnected for session {session_id} at {datetime.now()}")
+                    self.logger.info(f"WebSocket disconnected for session {session_id} at {datetime.now()}")
                     break
                 except json.JSONDecodeError as e:
-                    print(f"JSON decode error: {e}")
+                    self.logger.warning(f"JSON decode error: {e}")
                     await websocket.send_text(json.dumps({
                         "type": "error",
                         "message": "Invalid JSON format",
                         "timestamp": datetime.now().isoformat()
                     }))
                 except Exception as e:
-                    print(f"Error processing message: {e}")
+                    self.logger.error(f"Error processing message: {e}")
                     await websocket.send_text(json.dumps({
                         "type": "error",
                         "message": f"Server error: {str(e)}",
@@ -185,9 +188,9 @@ class AudioProcessingService:
                     }))
 
         except WebSocketDisconnect:
-            print(f"WebSocket connection closed for session {session_id} at {datetime.now()}")
+            self.logger.info(f"WebSocket connection closed for session {session_id} at {datetime.now()}")
         except Exception as e:
-            print(f"WebSocket error: {e}")
+            self.logger.error(f"WebSocket error: {e}")
         finally:
             await self.finalize_session_recording(session_id)
             # Cleanup session
@@ -206,7 +209,7 @@ class AudioProcessingService:
             # Convert bytes array back to bytes
             audio_bytes = bytes(audio_data)
 
-            print(f"Session {session_id} - Received chunk {sequence_number}: {len(audio_bytes)} bytes")
+            self.logger.debug(f"Session {session_id} - Received chunk {sequence_number}: {len(audio_bytes)} bytes")
 
             # Add chunk to session
             if session_id in self.audio_sessions:
@@ -226,7 +229,7 @@ class AudioProcessingService:
                         pcm_bytes = self._decode_to_pcm(audio_bytes, mime_type)
                         decoded_len = len(pcm_bytes)
                     except Exception as decode_error:
-                        print(f"PCM decode failed for chunk {sequence_number}: {decode_error}")
+                        self.logger.warning(f"PCM decode failed for chunk {sequence_number}: {decode_error}")
                         await websocket.send_text(json.dumps({
                             "type": "error",
                             "message": f"PCM decode failed for chunk {sequence_number}: {decode_error}",
@@ -268,7 +271,7 @@ class AudioProcessingService:
                     await self.process_audio_batch(session_id)
 
         except Exception as e:
-            print(f"Error processing audio chunk: {e}")
+            self.logger.error(f"Error processing audio chunk: {e}")
             await websocket.send_text(json.dumps({
                 "type": "error",
                 "message": f"Failed to process audio chunk: {str(e)}",
@@ -287,7 +290,7 @@ class AudioProcessingService:
             return
 
         try:
-            print(f"Processing batch for session {session_id}: {len(chunks)} chunks")
+            self.logger.info(f"Processing batch for session {session_id}: {len(chunks)} chunks")
 
             source_mime = (session.get("source_mime_type") or "").lower()
             if "webm" in source_mime:
@@ -296,7 +299,7 @@ class AudioProcessingService:
                 try:
                     pcm_full = self._decode_to_pcm(webm_bytes, "webm")
                 except Exception as e:
-                    print(f"Batch WebM decode failed: {e}")
+                    self.logger.warning(f"Batch WebM decode failed: {e}")
                     await session["websocket"].send_text(json.dumps({
                         "type": "error",
                         "message": f"Batch WebM decode failed: {e}",
@@ -306,7 +309,7 @@ class AudioProcessingService:
 
                 start_pcm = session.get("processed_pcm_offset", 0)
                 if len(pcm_full) <= start_pcm:
-                    print("No new PCM produced from WebM for this batch")
+                    self.logger.debug("No new PCM produced from WebM for this batch")
                     return
 
                 pcm_slice = pcm_full[start_pcm:]
@@ -314,8 +317,8 @@ class AudioProcessingService:
                 session["processed_pcm_offset"] = len(pcm_full)
 
                 total_size = len(wav_bytes)
-                print(f"Built WAV from WebM PCM slice: {total_size} bytes (pcm {len(pcm_slice)}), source={source_mime}")
-                print(f"WAV header preview: {wav_bytes[:20].hex()}")
+                self.logger.debug(f"Built WAV from WebM PCM slice: {total_size} bytes (pcm {len(pcm_slice)}), source={source_mime}")
+                self.logger.debug(f"WAV header preview: {wav_bytes[:20].hex()}")
             else:
                 # Build WAV from the newly added PCM slice
                 pcm_buffer: bytearray = session["pcm_buffer"]
@@ -323,7 +326,7 @@ class AudioProcessingService:
                 end_offset: int = len(pcm_buffer)
 
                 if end_offset <= start_offset:
-                    print("No new PCM to process for this batch")
+                    self.logger.debug("No new PCM to process for this batch")
                     return
 
                 pcm_slice = bytes(pcm_buffer[start_offset:end_offset])
@@ -331,8 +334,8 @@ class AudioProcessingService:
 
                 total_size = len(wav_bytes)
 
-                print(f"Built WAV from PCM slice: {total_size} bytes (pcm {len(pcm_slice)}), source={session.get('source_mime_type')}")
-                print(f"WAV header preview: {wav_bytes[:20].hex()}")
+                self.logger.debug(f"Built WAV from PCM slice: {total_size} bytes (pcm {len(pcm_slice)}), source={session.get('source_mime_type')}")
+                self.logger.debug(f"WAV header preview: {wav_bytes[:20].hex()}")
 
             # Send batch processing status
             await session["websocket"].send_text(json.dumps({
@@ -343,7 +346,7 @@ class AudioProcessingService:
 
             # Process the WAV bytes for this batch
             session_language = session.get("language", "en")
-            print(f"DEBUG: Processing batch for session {session_id} with language: {session_language}")
+            self.logger.debug(f"Processing batch for session {session_id} with language: {session_language}")
             transcription_result = await self.batch_transcribe_audio(wav_bytes, session_id, len(chunks), session_language)
 
             # Send transcription result
@@ -371,10 +374,10 @@ class AudioProcessingService:
             session["chunks"] = []
             session["last_processed"] = datetime.now()
 
-            print(f"Batch processing complete for session {session_id}")
+            self.logger.info(f"Batch processing complete for session {session_id}")
 
         except Exception as e:
-            print(f"Error processing batch: {e}")
+            self.logger.error(f"Error processing batch: {e}")
             await session["websocket"].send_text(json.dumps({
                 "type": "error",
                 "message": f"Batch processing failed: {str(e)}",
@@ -401,7 +404,7 @@ class AudioProcessingService:
                     "timestamp": datetime.now().isoformat()
                 }))
             except Exception as exc:
-                print(f"Failed to send recording_complete message for session {session_id}: {exc}")
+                self.logger.warning(f"Failed to send recording_complete message for session {session_id}: {exc}")
 
         # Close the websocket to force a fresh session on next recording
         if websocket and websocket.client_state == WebSocketState.CONNECTED:
@@ -422,7 +425,7 @@ class AudioProcessingService:
         try:
             wav_bytes = await self._build_full_wav(session)
             if not wav_bytes:
-                print(f"No audio captured for session {session_id}; skipping upload")
+                self.logger.info(f"No audio captured for session {session_id}; skipping upload")
                 return
 
             metadata = {
@@ -440,10 +443,10 @@ class AudioProcessingService:
             )
 
             if blob_name:
-                print(f"Session {session_id} recording uploaded to {blob_name}")
+                self.logger.info(f"Session {session_id} recording uploaded to {blob_name}")
             session["finalized"] = True
         except Exception as exc:
-            print(f"Failed to upload session {session_id} recording: {exc}")
+            self.logger.error(f"Failed to upload session {session_id} recording: {exc}")
 
     async def _build_full_wav(self, session: Dict[str, Any]) -> Optional[bytes]:
         source_mime = (session.get("source_mime_type") or "").lower()
@@ -454,7 +457,7 @@ class AudioProcessingService:
             try:
                 pcm_bytes = self._decode_to_pcm(bytes(session["webm_buffer"]), "webm")
             except Exception as exc:
-                print(f"Failed to decode WebM buffer for full session: {exc}")
+                self.logger.warning(f"Failed to decode WebM buffer for full session: {exc}")
                 return None
         else:
             pcm_bytes = bytes(session.get("full_pcm_buffer") or b"")

@@ -1,9 +1,31 @@
 import os
+import logging
 from pathlib import Path
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
+
+# Configure logging
+def setup_logging():
+    """Configure application logging"""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+    # Reduce noise from external libraries
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("openai").setLevel(logging.WARNING)
+    logging.getLogger("uvicorn").setLevel(logging.INFO)
+    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+
+# Set up logging
+setup_logging()
+
+# Create a logger instance for the config module
+logger = logging.getLogger(__name__)
 
 # API Configuration
 class Config:

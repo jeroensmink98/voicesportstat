@@ -1,4 +1,5 @@
 import os
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any
@@ -18,13 +19,14 @@ class TranscriptionService:
     """Service for handling audio transcription using OpenAI Whisper"""
 
     def __init__(self):
+        self.logger = logging.getLogger(__name__)
         # Create transcriptions directory if it doesn't exist
         self.TRANSCRIPTIONS_DIR = Path("transcriptions")
         self.TRANSCRIPTIONS_DIR.mkdir(exist_ok=True)
 
     async def transcribe_audio(self, audio_bytes: bytes, session_id: str, chunk_count: int, language: str = "en") -> Dict[str, Any]:
         """Transcribe WAV bytes using OpenAI Whisper API. Assumes bytes are valid WAV."""
-        print(f"DEBUG: transcribe_audio called with language: {language} for session: {session_id}")
+        self.logger.debug(f"transcribe_audio called with language: {language} for session: {session_id}")
         temp_wav_path = None
 
         try:
@@ -43,12 +45,12 @@ class TranscriptionService:
                     frames = wf.getnframes()
                     rate = wf.getframerate() or 16000
                     estimated_duration = frames / float(rate)
-                    print(f"WAV diagnostics: channels={wf.getnchannels()} sampwidth={wf.getsampwidth()} framerate={wf.getframerate()} frames={frames} duration~{estimated_duration:.2f}s")
+                    self.logger.debug(f"WAV diagnostics: channels={wf.getnchannels()} sampwidth={wf.getsampwidth()} framerate={wf.getframerate()} frames={frames} duration~{estimated_duration:.2f}s")
             except Exception as diag_err:
-                print(f"WAV diagnostics failed: {diag_err}")
+                self.logger.warning(f"WAV diagnostics failed: {diag_err}")
                 estimated_duration = chunk_count * 0.25
 
-            print(f"Transcribing {len(audio_bytes)} bytes (estimated {estimated_duration:.2f}s) using Whisper API...")
+            self.logger.info(f"Transcribing {len(audio_bytes)} bytes (estimated {estimated_duration:.2f}s) using Whisper API...")
 
             # Transcribe
             with open(temp_wav_path, "rb") as audio_file:
@@ -60,11 +62,11 @@ class TranscriptionService:
                 )
 
             transcription_text = response.text
-            print(f"✓ WAV transcription successful: {len(transcription_text)} characters")
+            self.logger.info(f"WAV transcription successful: {len(transcription_text)} characters")
 
             # Create transcription result
             detected_language = getattr(response, 'language', None)
-            print(f"DEBUG: Using language '{language}' for result (detected: {detected_language})")
+            self.logger.debug(f"Using language '{language}' for result (detected: {detected_language})")
             result = {
                 "text": transcription_text,
                 "confidence": 0.95,
@@ -80,11 +82,11 @@ class TranscriptionService:
             # Save transcription to JSON file
             await self.save_transcription_to_json(result, session_id, timestamp, language)
 
-            print(f"Transcription complete: {len(transcription_text)} characters")
+            self.logger.info(f"Transcription complete: {len(transcription_text)} characters")
             return result
 
         except Exception as e:
-            print(f"Error in Whisper transcription: {e}")
+            self.logger.error(f"Error in Whisper transcription: {e}")
 
             # Return error result
             return {
@@ -134,7 +136,7 @@ class TranscriptionService:
                     with open(filepath, "r", encoding="utf-8") as json_file:
                         session_data = json.load(json_file)
                 except json.JSONDecodeError:
-                    print(f"Warning: Existing session file {filepath} is corrupted, creating new one")
+                    self.logger.warning(f"Existing session file {filepath} is corrupted, creating new one")
                     session_data = None
             else:
                 session_data = None
@@ -166,19 +168,19 @@ class TranscriptionService:
             with open(filepath, "w", encoding="utf-8") as json_file:
                 json.dump(session_data, json_file, indent=2, ensure_ascii=False)
 
-            print(f"Transcription saved to session file: {filepath} (total transcriptions: {len(session_data['transcriptions'])})")
+            self.logger.info(f"Transcription saved to session file: {filepath} (total transcriptions: {len(session_data['transcriptions'])})")
 
         except Exception as e:
-            print(f"Error saving transcription to JSON: {e}")
+            self.logger.error(f"Error saving transcription to JSON: {e}")
 
     def _cleanup_temp_files(self, wav_path: Path):
         """Clean up temporary WAV file"""
         if wav_path and os.path.exists(wav_path):
             try:
                 os.unlink(wav_path)
-                print(f"Cleaned up temporary file: {wav_path}")
+                self.logger.debug(f"Cleaned up temporary file: {wav_path}")
             except Exception as cleanup_error:
-                print(f"Warning: Could not clean up {wav_path}: {cleanup_error}")
+                self.logger.warning(f"Could not clean up {wav_path}: {cleanup_error}")
 
 
 # Global instance

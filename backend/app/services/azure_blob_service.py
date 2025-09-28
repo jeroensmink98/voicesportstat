@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from datetime import datetime
 from typing import Dict, Optional
@@ -14,6 +15,7 @@ class AzureBlobStorageService:
     """Uploads finalized audio recordings to Azure Blob Storage with metadata."""
 
     def __init__(self):
+        self.logger = logging.getLogger(__name__)
         self.account_name = os.getenv("AZURE_STORAGE_ACCOUNT_NAME")
         self.account_key = os.getenv("AZURE_STORAGE_ACCOUNT_KEY")
         # Default container if none provided
@@ -26,7 +28,7 @@ class AzureBlobStorageService:
             try:
                 self._blob_service_client = self._create_blob_service_client()
             except Exception as exc:  # pragma: no cover - configuration failures logged for diagnostics
-                print(f"Failed to initialize Azure BlobServiceClient: {exc}")
+                self.logger.error(f"Failed to initialize Azure BlobServiceClient: {exc}")
                 self._blob_service_client = None
 
     @property
@@ -52,7 +54,7 @@ class AzureBlobStorageService:
 
         try:
             container_client.create_container()
-            print(f"Created Azure Blob container '{self.container_name}'")
+            self.logger.info(f"Created Azure Blob container '{self.container_name}'")
         except Exception as exc:
             # Ignore container already exists errors; re-raise others
             from azure.core.exceptions import ResourceExistsError
@@ -78,7 +80,7 @@ class AzureBlobStorageService:
         """
 
         if not self.is_configured:
-            print("Azure blob storage is not configured; skipping upload")
+            self.logger.info("Azure blob storage is not configured; skipping upload")
             return None
 
         loop = asyncio.get_running_loop()
@@ -120,7 +122,7 @@ class AzureBlobStorageService:
             content_settings=content_settings,
         )
 
-        print(f"Uploaded session recording to Azure blob '{blob_name}' with metadata {blob_metadata}")
+        self.logger.info(f"Uploaded session recording to Azure blob '{blob_name}' with metadata {blob_metadata}")
         return blob_name
 
     @staticmethod
