@@ -73,7 +73,6 @@
 				},
 				onWebSocketConnected: () => {
 					wsConnected = true;
-					status = 'WebSocket connected';
 				},
 				onWebSocketDisconnected: () => {
 					wsConnected = false;
