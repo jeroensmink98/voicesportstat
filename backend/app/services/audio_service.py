@@ -10,11 +10,13 @@ from typing import Optional
 import ffmpeg
 
 from fastapi import WebSocket, WebSocketDisconnect
+from starlette.websockets import WebSocketState
 
 from ..models.audio import (
     AudioChunk, AudioSession, WebSocketMessage,
     TranscriptionResult, TranscriptionResponse, RecordingCompleteInfo
 )
+from .azure_blob_service import azure_blob_service
 
 
 class AudioProcessingService:
@@ -113,6 +115,8 @@ class AudioProcessingService:
                 # For WebM/Opus sources we keep container bytes and decode at batch time
                 "webm_buffer": bytearray(),
                 "processed_pcm_offset": 0,
+                # Aggregate buffers so we can rebuild the full session audio upon completion
+                "full_pcm_buffer": bytearray(),
             }
 
             # Send welcome message
@@ -185,6 +189,7 @@ class AudioProcessingService:
         except Exception as e:
             print(f"WebSocket error: {e}")
         finally:
+            await self.finalize_session_recording(session_id)
             # Cleanup session
             if session_id in self.audio_sessions:
                 del self.audio_sessions[session_id]
@@ -229,7 +234,9 @@ class AudioProcessingService:
                         }))
                         return
 
+                if not (session["source_mime_type"] and "webm" in session["source_mime_type"].lower()):
                     session["pcm_buffer"].extend(pcm_bytes)
+                    session["full_pcm_buffer"].extend(pcm_bytes)
 
                 # Store only metadata for acknowledgments and counting
                 session["chunks"].append({
@@ -376,23 +383,86 @@ class AudioProcessingService:
 
     async def process_final_batch(self, session_id: str):
         """Process any remaining chunks when recording ends"""
-        if session_id in self.audio_sessions and self.audio_sessions[session_id]["chunks"]:
+        if session_id not in self.audio_sessions:
+            return
+
+        session = self.audio_sessions[session_id]
+
+        if session["chunks"]:
             await self.process_audio_batch(session_id)
 
-            # Send final summary
-            session = self.audio_sessions[session_id]
-            await session["websocket"].send_text(json.dumps({
-                "type": "recording_complete",
-                "message": "Recording session completed",
-                "total_chunks_processed": session["total_chunks"],
-                "timestamp": datetime.now().isoformat()
-            }))
-
-            # Close the websocket to force a fresh session on next recording
+        websocket = session.get("websocket")
+        if websocket and websocket.application_state == WebSocketState.CONNECTED:
             try:
-                await session["websocket"].close()
-            except Exception as _:
+                await websocket.send_text(json.dumps({
+                    "type": "recording_complete",
+                    "message": "Recording session completed",
+                    "total_chunks_processed": session["total_chunks"],
+                    "timestamp": datetime.now().isoformat()
+                }))
+            except Exception as exc:
+                print(f"Failed to send recording_complete message for session {session_id}: {exc}")
+
+        # Close the websocket to force a fresh session on next recording
+        if websocket and websocket.client_state == WebSocketState.CONNECTED:
+            try:
+                await websocket.close()
+            except Exception:
                 pass
+
+    async def finalize_session_recording(self, session_id: str):
+        """Persist the complete session audio to Azure blob storage."""
+        session = self.audio_sessions.get(session_id)
+        if not session:
+            return
+
+        if session.get("finalized"):
+            return
+
+        try:
+            wav_bytes = await self._build_full_wav(session)
+            if not wav_bytes:
+                print(f"No audio captured for session {session_id}; skipping upload")
+                return
+
+            metadata = {
+                "language": session.get("language", "unknown"),
+                "source_mime": session.get("source_mime_type") or "unknown",
+                "total_chunks": str(session.get("total_chunks", 0)),
+                "started_at": session.get("start_time").isoformat() if session.get("start_time") else "",
+            }
+
+            blob_name = await azure_blob_service.upload_session_audio(
+                session_id=session_id,
+                wav_bytes=wav_bytes,
+                language=session.get("language"),
+                metadata=metadata,
+            )
+
+            if blob_name:
+                print(f"Session {session_id} recording uploaded to {blob_name}")
+            session["finalized"] = True
+        except Exception as exc:
+            print(f"Failed to upload session {session_id} recording: {exc}")
+
+    async def _build_full_wav(self, session: Dict[str, Any]) -> Optional[bytes]:
+        source_mime = (session.get("source_mime_type") or "").lower()
+
+        if "webm" in source_mime:
+            if not session.get("webm_buffer"):
+                return None
+            try:
+                pcm_bytes = self._decode_to_pcm(bytes(session["webm_buffer"]), "webm")
+            except Exception as exc:
+                print(f"Failed to decode WebM buffer for full session: {exc}")
+                return None
+        else:
+            pcm_bytes = bytes(session.get("full_pcm_buffer") or b"")
+
+        if not pcm_bytes:
+            return None
+
+        return self._wav_from_pcm(pcm_bytes)
 
     async def handle_other_messages(self, websocket: WebSocket, message: Dict[str, Any]):
         """Handle other types of WebSocket messages"""

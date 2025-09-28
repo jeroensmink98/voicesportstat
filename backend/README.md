@@ -11,9 +11,12 @@ FastAPI backend for handling audio streaming and transcription via WebSocket.
    ```
 
 2. **Configure environment variables**:
-   Create a `.env` file with your OpenAI API key:
+   Create a `.env` file with your OpenAI API key and Azure storage credentials:
    ```bash
    OPENAI_API_KEY=sk-your-openai-api-key-here
+   AZURE_STORAGE_ACCOUNT_NAME=your-account-name
+   AZURE_STORAGE_ACCOUNT_KEY=your-account-key
+   AZURE_STORAGE_CONTAINER=recordings  # optional override
    ```
 
 3. **Run the server**:
@@ -91,6 +94,7 @@ The `/ws/audio` endpoint handles real-time audio streaming:
 - ✅ OpenAI Whisper API integration
 - ✅ Batch processing for optimal accuracy
 - ✅ JSON file output for transcriptions
+- ✅ Automatic upload of complete session recordings to Azure Blob Storage with metadata
 - ✅ Error handling and connection management
 - ✅ CORS support for frontend integration
 - ✅ Transcription file management API
