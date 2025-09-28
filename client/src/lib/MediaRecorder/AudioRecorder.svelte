@@ -32,17 +32,6 @@
 	>([]);
 	let chunksReceived = $state(0);
 	let isProcessingBatch = $state(false);
-	let permissionInfo = $state<{
-		hasPermission: boolean;
-		age: number | null;
-		isExpiringSoon: boolean;
-		domain: string | null;
-	}>({
-		hasPermission: false,
-		age: null,
-		isExpiringSoon: false,
-		domain: null
-	});
 
 	// Watch for language changes and log them
 	$effect(() => {
@@ -52,8 +41,7 @@
 	// Initialize recorder
 	onMount(async () => {
 		// Check for stored permissions first
-		permissionInfo = PermissionStorage.getPermissionInfo();
-		hasPermission = permissionInfo.hasPermission;
+		hasPermission = PermissionStorage.getPermissionInfo().hasPermission;
 
 		recorder = new VoiceMediaRecorder(
 			{
@@ -133,10 +121,7 @@
 				onPermissionChanged: (granted) => {
 					hasPermission = granted;
 					PermissionStorage.setPermission(granted);
-					permissionInfo = PermissionStorage.getPermissionInfo();
-					if (granted) {
-						status = 'Microphone permission granted and saved';
-					} else {
+					if (!granted) {
 						status = 'Microphone permission denied';
 					}
 				}
@@ -145,14 +130,10 @@
 
 		// Auto-request permission if previously granted
 		if (hasPermission && !isRecording) {
-			status = 'Auto-requesting microphone permission...';
 			const granted = await requestPermission();
-			if (granted) {
-				status = 'Microphone permission restored from previous session';
-			} else {
+			if (!granted) {
 				status = 'Failed to restore microphone permission';
 				PermissionStorage.clearPermission();
-				permissionInfo = PermissionStorage.getPermissionInfo();
 			}
 		}
 
@@ -223,15 +204,6 @@
 		isProcessingBatch = false;
 	}
 
-	function revokePermission() {
-		PermissionStorage.clearPermission();
-		permissionInfo = PermissionStorage.getPermissionInfo();
-		hasPermission = false;
-		if (recorder) {
-			recorder.cleanup();
-		}
-		status = 'Microphone permission revoked and cleared';
-	}
 </script>
 
 <div class="w-full max-w-4xl mx-auto p-5 border border-gray-300 rounded-lg font-sans">
@@ -239,8 +211,6 @@
 		{hasPermission}
 		{wsConnected}
 		{isRecording}
-		{permissionInfo}
-		onRevokePermission={revokePermission}
 	/>
 
 	<RecordingStatus {error} {status} {isProcessingBatch} />
@@ -249,28 +219,28 @@
 		{#if !hasPermission}
 			<button
 				class="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
-				on:click={requestPermission}
+				onclick={requestPermission}
 			>
 				Grant Microphone Permission
 			</button>
 		{:else if !wsConnected}
 			<button
 				class="px-4 py-2 bg-orange-500 text-white rounded hover:bg-orange-600 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
-				on:click={connectWebSocket}
+				onclick={connectWebSocket}
 			>
 				Connect WebSocket
 			</button>
 		{:else if !isRecording}
 			<button
 				class="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
-				on:click={startRecording}
+				onclick={startRecording}
 			>
 				Start Recording
 			</button>
 		{:else}
 			<button
 				class="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
-				on:click={stopRecording}
+				onclick={stopRecording}
 			>
 				Stop Recording
 			</button>
@@ -278,7 +248,7 @@
 
 		<button
 			class="px-4 py-2 bg-transparent text-gray-600 border border-gray-300 rounded hover:bg-gray-50 transition-colors"
-			on:click={cleanup}
+			onclick={cleanup}
 		>
 			Cleanup
 		</button>
